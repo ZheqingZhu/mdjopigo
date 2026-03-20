@@ -65,7 +65,6 @@ run_max_entropy <- function(df_overall, df_layer, feature_mapping, extra_constra
   n_subgroups <- nrow(subgroups_grid)
   subgroups_labels <- apply(subgroups_grid, 1, paste, collapse = " | ")
   
-  # Calculate Marginals
   marginals <- list()
   for (feat_name in names(feature_mapping)) {
     levels <- feature_mapping[[feat_name]]
@@ -76,7 +75,6 @@ run_max_entropy <- function(df_overall, df_layer, feature_mapping, extra_constra
     }
   }
   
-  # Build constraint matrices
   n_constraints <- 1 + length(marginals) + length(extra_constraints)
   A <- matrix(0, nrow = n_constraints, ncol = n_subgroups)
   b <- numeric(n_constraints)
@@ -100,20 +98,29 @@ run_max_entropy <- function(df_overall, df_layer, feature_mapping, extra_constra
     row_idx <- row_idx + 1
   }
   
-  eval_f <- function(x) { x_safe <- pmax(x, 0); sum(x_safe * log(x_safe + 1e-10)) }
-  eval_g_eq <- function(x) { as.numeric(A %*% x - b) }
+  eval_f_penalty <- function(x) { 
+    x_safe <- pmax(x, 1e-10)
+    entropy <- sum(x_safe * log(x_safe)) 
+    penalty <- 10000 * sum((A %*% x - b)^2)
+    return(entropy + penalty)
+  }
   
   x0 <- rep(1 / n_subgroups, n_subgroups)
-  res <- slsqp(x0, fn = eval_f, lower = rep(0, n_subgroups), upper = rep(1, n_subgroups), heq = eval_g_eq)
+  
+  res <- slsqp(x0, fn = eval_f_penalty, lower = rep(0, n_subgroups), upper = rep(1, n_subgroups))
   
   if (res$convergence >= 0) {
+    cat(sprintf("-> MaxEnt Penalty Value: %.6f\n", sum((A %*% res$par - b)^2)))
+    
     exact_counts <- round(res$par * total_n)
+
     diff <- total_n - sum(exact_counts)
     if (diff != 0) {
       max_idx <- which.max(exact_counts)
       exact_counts[max_idx] <- exact_counts[max_idx] + diff
     }
-    cat("-> Phase 1 Solved! Topology matrix generated.\n")
+    
+    cat("-> Phase 1 Solved! Topology matrix generated via Lagrangian Relaxation.\n")
     return(list(df = data.frame(Subgroup = subgroups_labels, Exact_Count = exact_counts), grid = subgroups_grid))
   } else {
     stop("Optimization failed.")
